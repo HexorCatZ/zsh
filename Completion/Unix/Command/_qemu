@@ -52,6 +52,6 @@ _arguments \
   '-loadvm[start right away with a saved state]:file:_files' \
   '-g[set initial graphic mode]:graphic mode:' \
   '-enable-kvm[Enable KVM full virtualization support.]' \
-  '-bios[Set the filename for the BIOS]:file:_files'
+  '-bios[Set the filename for the BIOS]:file:_files' \
   ':disk image:_files'
 
