@@ -373,6 +373,13 @@ watchlog2(int inout, WATCH_STRUCT_UTMP *u, char *fmt, int prnt, int fini)
 		case 'f':
 		    tunsetattrs(TXTFGCOLOUR);
 		    break;
+		case 'H':
+		    if (*fmt == '{') {
+			fmt = parsehighlight(fmt + 1, '}', &atr);
+			if (atr && atr != TXT_ERROR)
+			    treplaceattrs(atr);
+		    }
+		    break;
 		case 'K':
 		    if (*fmt == '{') {
 			fmt++;
@@ -423,20 +430,23 @@ watchlog2(int inout, WATCH_STRUCT_UTMP *u, char *fmt, int prnt, int fini)
 /* See if the watch entry matches */
 
 static int
-watchlog_match(char *teststr, char *actual, int len)
+watchlog_match(char *teststr, char *actual, size_t buflen)
 {
     int ret = 0;
     Patprog pprog;
     char *str = dupstring(teststr);
+    size_t len = strnlen(actual, buflen);
+    char *user = metafy(actual, len,
+	    len == buflen ? META_HEAPDUP : META_USEHEAP);
 
     tokenize(str);
 
     if ((pprog = patcompile(str, PAT_STATIC, 0))) {
 	queue_signals();
-	if (pattry(pprog, actual))
+	if (pattry(pprog, user))
 	    ret = 1;
 	unqueue_signals();
-    } else if (!strncmp(actual, teststr, len))
+    } else if (!strcmp(user, teststr))
 	ret = 1;
     return ret;
 }
@@ -456,10 +466,17 @@ watchlog(int inout, WATCH_STRUCT_UTMP *u, char **w, char *fmt)
 	(void)watchlog2(inout, u, fmt, 1, 0);
 	return;
     }
-    if (*w && !strcmp(*w, "notme") &&
-	strncmp(u->ut_name, get_username(), sizeof(u->ut_name))) {
-	(void)watchlog2(inout, u, fmt, 1, 0);
-	return;
+    if (*w && !strcmp(*w, "notme")) {
+	int len = strnlen(u->ut_name, sizeof(u->ut_name));
+	char *username = metafy(u->ut_name, len,
+				(len == sizeof(u->ut_name) ?
+				 META_HEAPDUP /* allow for nul terminator */ :
+				 META_USEHEAP));
+	if (strcmp(username, get_username())) {
+	    (void)watchlog2(inout, u, fmt, 1, 0);
+	    return;
+	}
+	w++;
     }
     for (; *w; w++) {
 	bad = 0;
@@ -488,7 +505,7 @@ watchlog(int inout, WATCH_STRUCT_UTMP *u, char **w, char *fmt)
 		for (vv = ++v; *vv && *vv != '%'; vv++);
 		sav = *vv;
 		*vv = '\0';
-		if (!watchlog_match(v, u->ut_host, strlen(v)))
+		if (!watchlog_match(v, u->ut_host, sizeof(u->ut_host)))
 		    bad = 1;
 		*vv = sav;
 		v = vv;
@@ -567,7 +584,7 @@ readwtab(WATCH_STRUCT_UTMP **head, int initial_sz)
 
     if (sz)
 	qsort((void *) *head, sz, sizeof(WATCH_STRUCT_UTMP),
-	           (int (*) _((const void *, const void *)))ucmp);
+	           (int (*) (const void *, const void *))ucmp);
     return sz;
 }
 

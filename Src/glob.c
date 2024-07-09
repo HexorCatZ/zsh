@@ -133,7 +133,7 @@ typedef struct stat *Statptr;	 /* This makes the Ultrix compiler happy.  Go figu
 #define TT_TERABYTES 5
 
 
-typedef int (*TestMatchFunc) _((char *, struct stat *, off_t, char *));
+typedef int (*TestMatchFunc) (char *, struct stat *, off_t, char *);
 
 struct qual {
     struct qual *next;		/* Next qualifier, must match                */
@@ -1264,7 +1264,7 @@ zglob(LinkList list, LinkNode np, int nountok)
 	int sense, qualsfound;
 	off_t data;
 	char *sdata, *newcolonmod, *ptr;
-	int (*func) _((char *, Statptr, off_t, char *));
+	int (*func) (char *, Statptr, off_t, char *);
 
 	/*
 	 * Initialise state variables for current file pattern.
@@ -1310,14 +1310,15 @@ zglob(LinkList list, LinkNode np, int nountok)
 	    if (*ptr == Dash)
 		*ptr = '-';
 	while (*s && !newcolonmod) {
-	    func = (int (*) _((char *, Statptr, off_t, char *)))0;
+	    func = (int (*) (char *, Statptr, off_t, char *)) 0;
 	    if (*s == ',') {
 		/* A comma separates alternative sets of qualifiers */
 		s++;
 		sense = 0;
 		if (qualct) {
 		    qn = (struct qual *)hcalloc(sizeof *qn);
-		    qo->or = qn;
+		    if (qo)
+			qo->or = qn;
 		    qo = qn;
 		    qualorct++;
 		    qualct = 0;
@@ -1960,7 +1961,7 @@ zglob(LinkList list, LinkNode np, int nountok)
 	/* Sort arguments in to lexical (and possibly numeric) order. *
 	 * This is reversed to facilitate insertion into the list.    */
 	qsort((void *) & matchbuf[0], matchct, sizeof(struct gmatch),
-	      (int (*) _((const void *, const void *)))gmatchcmp);
+	      (int (*) (const void *, const void *)) gmatchcmp);
     }
 
     if (first < 0) {

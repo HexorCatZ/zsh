@@ -186,7 +186,7 @@ typedef struct thingy *Thingy;
 
 /* widgets (ZLE functions) */
 
-typedef int (*ZleIntFunc) _((char **));
+typedef int (*ZleIntFunc) (char **);
 
 struct widget {
     int flags;		/* flags (see below) */
@@ -319,7 +319,7 @@ struct vichange {
 
 typedef struct keymap *Keymap;
 
-typedef void (*KeyScanFunc) _((char *, Thingy, char *, void *));
+typedef void (*KeyScanFunc) (char *, Thingy, char *, void *);
 
 #define invicmdmode() (!strcmp(curkeymapname, "vicmd"))
 
@@ -435,6 +435,8 @@ enum {
 struct region_highlight {
     /* Attributes turned on in the region */
     zattr atr;
+    /* Priority for this region relative to others that overlap */
+    int layer;
     /* Start of the region */
     int start;
     /* Start of the region in metafied ZLE line */

@@ -670,8 +670,9 @@ This manual was generated with Zsh tt(version()).
 When a em(named reference) is created with `tt(typeset -n)', all uses
 of var(pname) in assignments and expansions instead assign to or
 expand var(rname).  This also applies to `tt(unset )var(pname)' and to
-most subsequent uses of `tt(typeset)' with the exception of
-`tt(typeset -n)' and `tt(typeset +n)', so to remove a named reference,
+most subsequent uses of `tt(typeset)' with the exceptions of declaring
+a local in a called function, or updating a current-scope parameter with
+`tt(typeset -n)' or `tt(typeset +n)'. Thus to remove a named reference,
 use either `tt(unset -n )var(pname)' (preferred) or one of:
 ifzman()
 example(tt(typeset -n )var(pname=)
@@ -748,9 +749,13 @@ vindex(argv)
 item(tt(argv) <S> <Z>)(
 Same as tt(*).  Assigning to tt(argv) changes the local positional
 parameters, but tt(argv) is em(not) itself a local parameter.
-Deleting tt(argv) with tt(unset) in any function deletes it everywhere,
-although only the innermost positional parameter array is deleted (so
-tt(*) and tt(@) in other scopes are not affected).
+Deleting tt(argv) with tt(unset) in any function deletes it everywhere.
+This can be avoided by declaring `tt(local +h argv)' before unsetting.
+Even when not so declared, only the innermost positional parameter
+array is deleted (so tt(*) and tt(@) in other scopes are not affected).
+
+A named reference to tt(argv) em(does not) permit a called function to
+access the positional parameters of its caller.
 )
 vindex(@)
 item(tt(@) <S>)(
@@ -949,7 +954,10 @@ has index 1, the signals are offset by 1 from the signal number
 used by the operating system.  For example, on typical Unix-like systems
 tt(HUP) is signal number 1, but is referred to as tt($signals[2]).  This
 is because of tt(EXIT) at position 1 in the array, which is used
-internally by zsh but is not known to the operating system.
+internally by zsh but is not known to the operating system. On many systems
+there is a block of reserved or unused signal numbers before the POSIX
+real-time signals so the array index can't be used as an accurate indicator
+of their signal number. Use, for example, tt(kill -l SIGRTMIN) instead.
 )
 vindex(TRY_BLOCK_ERROR)
 item(tt(TRY_BLOCK_ERROR) <S>)(
@@ -1023,11 +1031,12 @@ Code specified by the tt(-c) option to the command line that invoked
 the shell.
 )
 item(tt(cmdsubst))(
-Command substitution using the tt(`)var(...)tt(`) or
-tt($+LPAR())var(...)tt(RPAR()) construct.
+Command substitution using of the tt(`)var(...)tt(`),
+tt($+LPAR())var(...)tt(RPAR()),tt(${{)var(name)tt(}) var(...)tt(}),
+tt(${|)var(...)tt(}), or tt(${ )var(...)tt( }) constructs.
 )
 item(tt(equalsubst))(
-File substitution using the tt(=+LPAR())var(...)tt(RPAR()) construct.
+The tt(=+LPAR())var(...)tt(RPAR()) form of process substitution.
 )
 item(tt(eval))(
 Code executed by the tt(eval) builtin.
@@ -1055,13 +1064,13 @@ item(tt(globsort))(
 Code executed to order files by the tt(o) glob qualifier.
 )
 item(tt(insubst))(
-File substitution using the tt(<LPAR())var(...)tt(RPAR()) construct.
+The tt(<LPAR())var(...)tt(RPAR()) form of process substitution.
 )
 item(tt(loadautofunc))(
 Code read directly from a file to define an autoloaded function.
 )
 item(tt(outsubst))(
-File substitution using the tt(>LPAR())var(...)tt(RPAR()) construct.
+The tt(>LPAR())var(...)tt(RPAR()) form of process substitution.
 )
 item(tt(sched))(
 Code executed by the tt(sched) builtin.
@@ -1631,9 +1640,13 @@ All other prompt escapes are also allowed.
 
 The actions available at the prompt are tt([nyae]):
 startsitem()
-sitem(tt(n) +LPAR()`no'+RPAR() +LPAR()default+RPAR())(Discard the correction and run the command.)
-sitem(tt(y) +LPAR()`yes'+RPAR())(Make the correction and run the command.)
-sitem(tt(a) +LPAR()`abort'+RPAR())(Discard the entire command line without running it.)
+sitem(tt(n) +LPAR()`no'+RPAR() +LPAR()default+RPAR())(Discard the correction.
+If there are no more corrections, accept the command line, else (with
+tt(CORRECT_ALL)) prompt for the next.)
+sitem(tt(y) +LPAR()`yes'+RPAR())(Make the correction. If there are no more
+corrections, accept the command line.)
+sitem(tt(a) +LPAR()`abort'+RPAR())(Place the entire command line in the
+history for later edit, but without accepting it.)
 sitem(tt(e) +LPAR()`edit'+RPAR())(Resume editing the command line.)
 endsitem()
 )

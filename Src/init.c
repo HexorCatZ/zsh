@@ -700,11 +700,14 @@ init_io(char *cmd)
      * process group leader.
      */
     mypid = (zlong)getpid();
-    if (opts[MONITOR] && (SHTTY != -1)) {
-	origpgrp = GETPGRP();
-        acquire_pgrp(); /* might also clear opts[MONITOR] */
-    } else
-	opts[MONITOR] = 0;
+    if (opts[MONITOR]) {
+	if (SHTTY == -1)
+	    opts[MONITOR] = 0;
+	else if (!origpgrp) {
+	    origpgrp = GETPGRP();
+	    acquire_pgrp(); /* might also clear opts[MONITOR] */
+	}
+    }
 #else
     opts[MONITOR] = 0;
 #endif
@@ -1212,8 +1215,8 @@ setupvals(char *cmd, char *runscript, char *zsh_name)
 #ifdef USE_GETPWUID
     if ((pswd = getpwuid(cached_uid))) {
 	if (EMULATION(EMULATE_ZSH))
-	    home = metafy(pswd->pw_dir, -1, META_DUP);
-	cached_username = ztrdup(pswd->pw_name);
+	    home = ztrdup_metafy(pswd->pw_dir);
+	cached_username = ztrdup_metafy(pswd->pw_name);
     }
     else
 #endif /* USE_GETPWUID */
@@ -1379,6 +1382,9 @@ setupshin(char *runscript)
 void
 init_signals(void)
 {
+    sigtrapped = (int *) hcalloc(TRAPCOUNT * sizeof(int));
+    siglists = (Eprog *) hcalloc(TRAPCOUNT * sizeof(Eprog));
+
     if (interact) {
 	int i;
 	signal_setmask(signal_mask(0));

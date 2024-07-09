@@ -273,11 +273,6 @@ fi],
 AC_DEFINE(CONFIG_LOCALE)
 )
 
-dnl Do you want to compile as K&R C.
-AC_ARG_ENABLE(ansi2knr,
-AS_HELP_STRING([--enable-ansi2knr],[translate source to K&R C before compiling]),
-[ansi2knr="$enableval"], [ansi2knr=default])
-
 ifdef([runhelpdir],[undefine([runhelpdir])])dnl
 AC_ARG_ENABLE(runhelpdir,
 AS_HELP_STRING([--enable-runhelpdir=DIR],[the directory in which to install run-help files]),
@@ -483,7 +478,7 @@ fi
 dnl if the user hasn't specified CFLAGS, then
 dnl   if compiler is gcc, then use -O2 and some warning flags
 dnl   else use -O
-if test -n "$auto_cflags" && test ."$ansi2knr" != .yes; then
+if test -n "$auto_cflags"; then
   if test "${enable_zsh_debug}" = yes; then
     if test -n "$GCC"; then
       CFLAGS="$CFLAGS -Wall -Wmissing-prototypes -ggdb"
@@ -557,30 +552,6 @@ case "$host_os" in
   darwin[[0-9]].*) CPP="$CPP -traditional-cpp" ;;
 esac
 
-fp_PROG_CC_STDC
-AC_MSG_CHECKING([whether to use prototypes])
-if test ."$ansi2knr" = .yes || test ."$ansi2knr" = .no; then
-  msg="(overridden) "
-else
-  msg=
-  if test ."$fp_cv_prog_cc_stdc" = .no; then
-    ansi2knr=yes
-  else
-    ansi2knr=no
-  fi
-fi
-AH_TEMPLATE([PROTOTYPES],
-[Define to 1 if ANSI function prototypes are usable.])
-if test "$ansi2knr" = yes; then
-  AC_MSG_RESULT(${msg}no)
-  U=_
-else
-  AC_MSG_RESULT(${msg}yes)
-  AC_DEFINE(PROTOTYPES)
-  U=
-fi
-AC_SUBST(U)
-
 AC_FUNC_ALLOCA              dnl Check how to get `alloca'.
 
 dnl If the compiler supports union initialisation
@@ -646,18 +617,6 @@ case "$LC_PAPER" in
   *)      PAPERSIZE=a4 ;;
 esac
 AC_SUBST(PAPERSIZE)
-
-AC_CHECK_PROGS([ANSI2KNR], [ansi2knr], [: ansi2knr])
-
-if test x"$ansi2knr" = xyes && test x"$ANSI2KNR" = x": ansi2knr"; then
-    echo "----------"
-    echo "configure fatal error:"
-    echo "ansi2knr was specified (--enable-ansi2knr) but the program could not be found."
-    echo "Either remove the configure option if it is not required or build the ansi2knr"
-    echo "program before reconfiguring Zsh.  The source code for ansi2knr is also"
-    echo "available in the GPL directory on Zsh distribution sites."
-    exit 1
-fi
 
 dnl ------------------
 dnl CHECK HEADER FILES
@@ -1295,10 +1254,11 @@ AC_CHECK_FUNCS(strftime strptime mktime timelocal \
 	       select poll \
 	       readlink faccessx fchdir ftruncate \
 	       fstat lstat lchown fchown fchmod \
-	       fseeko ftello \
+	       fpurge fseeko ftello \
 	       mkfifo _mktemp mkstemp \
 	       waitpid wait3 \
 	       sigaction sigblock sighold sigrelse sigsetmask sigprocmask \
+	       sigqueue \
 	       killpg setpgid setpgrp tcsetpgrp tcgetattr nice \
 	       gethostname gethostbyname2 getipnodebyname \
 	       inet_aton inet_pton inet_ntop \
@@ -1767,27 +1727,27 @@ if test x$zsh_cv_path_term_header != xnone; then
   fi
 
   AC_MSG_CHECKING(if boolcodes is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = boolcodes; puts(*test);]])],[AC_DEFINE(HAVE_BOOLCODES) boolcodes=yes],[boolcodes=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)boolcodes; puts(*test);]])],[AC_DEFINE(HAVE_BOOLCODES) boolcodes=yes],[boolcodes=no])
   AC_MSG_RESULT($boolcodes)
 
   AC_MSG_CHECKING(if numcodes is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = numcodes; puts(*test);]])],[AC_DEFINE(HAVE_NUMCODES) numcodes=yes],[numcodes=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)numcodes; puts(*test);]])],[AC_DEFINE(HAVE_NUMCODES) numcodes=yes],[numcodes=no])
   AC_MSG_RESULT($numcodes)
 
   AC_MSG_CHECKING(if strcodes is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = strcodes; puts(*test);]])],[AC_DEFINE(HAVE_STRCODES) strcodes=yes],[strcodes=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)strcodes; puts(*test);]])],[AC_DEFINE(HAVE_STRCODES) strcodes=yes],[strcodes=no])
   AC_MSG_RESULT($strcodes)
 
   AC_MSG_CHECKING(if boolnames is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = boolnames; puts(*test);]])],[AC_DEFINE(HAVE_BOOLNAMES) boolnames=yes],[boolnames=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)boolnames; puts(*test);]])],[AC_DEFINE(HAVE_BOOLNAMES) boolnames=yes],[boolnames=no])
   AC_MSG_RESULT($boolnames)
 
   AC_MSG_CHECKING(if numnames is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = numnames; puts(*test);]])],[AC_DEFINE(HAVE_NUMNAMES) numnames=yes],[numnames=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)numnames; puts(*test);]])],[AC_DEFINE(HAVE_NUMNAMES) numnames=yes],[numnames=no])
   AC_MSG_RESULT($numnames)
 
   AC_MSG_CHECKING(if strnames is available)
-  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = strnames; puts(*test);]])],[AC_DEFINE(HAVE_STRNAMES) strnames=yes],[strnames=no])
+  AC_LINK_IFELSE([AC_LANG_PROGRAM([[$term_includes]], [[char **test = (char **)strnames; puts(*test);]])],[AC_DEFINE(HAVE_STRNAMES) strnames=yes],[strnames=no])
   AC_MSG_RESULT($strnames)
 
   dnl There are apparently defective terminal library headers on some
@@ -2015,7 +1975,7 @@ AH_TEMPLATE([PATH_DEV_FD],
 [Define to the path of the /dev/fd filesystem.])
 AC_CACHE_CHECK(for /dev/fd filesystem, zsh_cv_sys_path_dev_fd,
 [for zsh_cv_sys_path_dev_fd in /proc/self/fd /dev/fd no; do
-   test x`echo ok|(exec 3<&0; cat $zsh_cv_sys_path_dev_fd/3 2>/dev/null;)` = xok && break
+   (exec 3<&0; test -e $zsh_cv_sys_path_dev_fd/3;) && break
  done])
 if test x$zsh_cv_sys_path_dev_fd != xno; then
   AC_DEFINE_UNQUOTED(PATH_DEV_FD, "$zsh_cv_sys_path_dev_fd")

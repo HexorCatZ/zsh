@@ -1489,21 +1489,27 @@ subst_parse_str(char **sp, int single, int err)
 static char *
 substevalchar(char *ptr)
 {
-    zlong ires = mathevali(ptr);
+    zlong ires;
     int len = 0;
+    int saved_errflag = errflag;
 
-    if (errflag)
-	return NULL;
-#ifdef MULTIBYTE_SUPPORT
-    if (isset(MULTIBYTE) && ires > 127) {
-	/* '\\' + 'U' + 8 bytes of character + '\0' */
-	char buf[11];
+    errflag = 0;
+    ires = mathevali(ptr);
 
-	/* inefficient: should separate out \U handling from getkeystring */
-	sprintf(buf, "\\U%.8x", (unsigned int)ires & 0xFFFFFFFFu);
-	ptr = getkeystring(buf, &len, GETKEYS_BINDKEY, NULL);
+    if (errflag) {  /* not a valid numerical expression */
+	errflag |= saved_errflag;
+	return noerrs ? dupstring(""): NULL;
     }
-    if (len == 0)
+    errflag |= saved_errflag;
+    if (ires < 0) {
+	zerr("character not in range");
+    }
+#ifdef MULTIBYTE_SUPPORT
+    else if (isset(MULTIBYTE) && ires > 127) {
+	ptr = zhalloc(MB_CUR_MAX+1);
+	len = ucs4tomb((unsigned int)ires & 0xffffffff, ptr);
+    }
+    if (len <= 0)
 #endif
     {
 	ptr = zhalloc(2);
@@ -1860,6 +1866,11 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
      * joining the array into a string (for compatibility with ksh/bash).
      */
     int quoted_array_with_offset = 0;
+    /*
+     * Nofork substitution controls
+     */
+    char *rplyvar = NULL;    /* Indicates ${|...;} or ${{var} ...;} */
+    char *rplytmp = NULL;    /* Indicates ${ ... ;} */
 
     *s++ = '\0';
     /*
@@ -1887,8 +1898,209 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
      * flags in parentheses, but also one ksh hack.
      */
     if (c == Inbrace) {
-	inbrace = 1;
-	s++;
+	/* For processing nofork command substitution string */
+	char *cmdarg = NULL, *endvar = NULL, inchar = *++s;
+	char *outbracep = s, sav = *s;
+	Param rplypm = NULL;
+	size_t slen = 0;
+	int trim = (!EMULATION(EMULATE_ZSH)) ? 2 : !qt;
+
+	inbrace = 1;	/* Outer scope boolean, see above */
+
+        /* Handling for nofork command substitution e.g. ${|cmd;}
+	 * See other comments about kludges for why this is here.
+	 *
+         * The command string is extracted and executed, and the
+         * substitution assigned. There's no (...)-flags processing,
+         * i.e. no ${|(U)cmd;}, because it looks quite awful and
+         * should not be part of command substitution in any case.
+         * Use ${(U)${|cmd;}} as you would for ${(U)$(cmd;)}.
+	 */
+	if (inchar == '|' || inchar == Bar || inblank(inchar)) {
+	    *s = Inbrace;
+	    if (skipparens(Inbrace, Outbrace, &outbracep) == 0)
+		slen = outbracep - s - 1;
+	    *s = sav;
+	    if (inchar == '|')
+		inchar = Bar;	/* Simplify later compares */
+	} else if (inchar == '{' || inchar == Inbrace) {
+	    *s = Inbrace;
+	    if ((outbracep = itype_end(s+1, INAMESPC, 0))) {
+		if (*outbracep == Inbrack &&
+		    (outbracep = parse_subscript(++outbracep, 1, ']')))
+		    ++outbracep;
+	    }
+
+	    /* If we reached the first close brace, find the last */
+	    if (outbracep && *outbracep == Outbrace) {
+		char outchar = inchar == Inbrace ? Outbrace : '}';
+		endvar = outbracep++;
+
+		/* Require space to avoid ${{var}} typo for ${${var}} */
+		if (!inblank(*outbracep)) {
+		    zerr("bad substitution");
+		    return NULL;
+		}
+
+		*endvar = '|';	/* Almost anything but braces/brackets */
+		outbracep = s;
+		if (skipparens(Inbrace, outchar, &outbracep) == 0)
+		    *endvar = Outbrace;
+		else {	/* Never happens? */
+		    *endvar = outchar;
+		    outbracep = endvar + 1;
+		}
+		slen = outbracep - s - 1;
+		if (inchar != Inbrace)
+		    outbracep[-1] = Outbrace;
+		*s = sav;
+		inchar = Inbrace;	/* Simplify later compares */
+	    } else {
+		zerr("bad substitution");
+		return NULL;
+	    }
+	}
+	if (slen > 1) {
+	    char *outbracep = s + slen;
+	    if (!itok(*s) || inblank(inchar)) {
+		/* This tokenize() is important */
+		char sav = *outbracep;
+		*outbracep = '\0';
+		tokenize(s);
+		*outbracep = sav;
+	    }
+	    if (*outbracep == Outbrace) {
+		if (endvar == s+1) {
+		    /* For consistency with ${} we allow ${{}...} */
+		    rplyvar = NULL;
+		}
+		if (endvar && *endvar == Outbrace) {
+		    cmdarg = dupstrpfx(endvar+1, outbracep-endvar-1);
+		    rplyvar = dupstrpfx(s+1,endvar-s-1);
+		} else {
+		    cmdarg = dupstrpfx(s+1, outbracep-s-1);
+		    rplyvar = "REPLY";
+		}
+		if (inblank(inchar)) {
+		    /*
+		     * Admittedly a hack.  Take advantage of the added
+		     * parameter scope and the semantics of $(<file) to
+		     * construct a command to write/read a temporary file.
+		     * Then fall through to the regular parameter handling
+		     * to manage word splitting, expansion flags, etc.
+		     */
+		    char *outfmt = ">| %s {\n%s\n;}";	/* 13 */
+		    if ((rplytmp = gettempname(NULL, 1))) {
+			/* Prevent shenanigans with $TMPPREFIX */
+			char *tmpfile = quotestring(rplytmp, QT_BACKSLASH);
+			char *dummy = zhalloc(strlen(cmdarg) +
+					      strlen(tmpfile) +
+					      13);
+			sprintf(dummy, outfmt, tmpfile, cmdarg);
+			cmdarg = dummy;
+		    } else {
+			/* TMPPREFIX not writable? */
+			cmdoutval = lastval;
+			cmdarg = NULL;
+		    }
+		}
+		s = outbracep;
+	    }
+	}
+
+	if (rplyvar) {
+	    /* char *rplyval = getsparam("REPLY");  cf. Future? below */
+	    startparamscope(); /* "local" behaves as if in a function */
+	    if (inchar == Bar) {
+		/* rplyvar should be REPLY at this point, but create
+		 * hardwired name anyway to expose any bugs elsewhere
+		 */
+		rplypm = createparam("REPLY", PM_LOCAL|PM_UNSET|PM_HIDE);
+		if (rplypm)	/* Shouldn't createparam() do this? */
+		    rplypm->level = locallevel;
+		/* Future?  Expose global value of $REPLY if any? */
+		/* if (rplyval) setsparam("REPLY", ztrdup(rplyval)); */
+	    } else if (inblank(inchar)) {
+		rplypm = createparam(".zsh.cmdsubst",
+				     PM_LOCAL|PM_UNSET|PM_HIDE|
+				     PM_READONLY_SPECIAL);
+		if (rplypm)
+		    rplypm->level = locallevel;
+	    }
+	    if (inchar != Inbrace && !rplypm) {
+		zerr("failed to create scope for command substitution");
+		return NULL;
+	    }
+	}
+
+	if (rplyvar && cmdarg && *cmdarg) {
+	    int obreaks = breaks;
+	    Eprog cmdprog;
+	    /* Execute the shell command */
+	    queue_signals();
+	    untokenize(cmdarg);
+	    cmdprog = parse_string(cmdarg, 0);
+	    if (cmdprog) {
+		/* exec.c handles dont_queue_signals() */
+		execode(cmdprog, 1, 0, "cmdsubst");
+		cmdoutval = lastval;
+		/* "return" behaves as if in a function */
+		if (retflag) {
+		    retflag = 0;
+		    breaks = obreaks;	/* Is this ever not zero? */
+		}
+	    } else	/* parse error */
+		errflag |= ERRFLAG_ERROR;
+	    if (rplypm)
+		rplypm->node.flags &= ~PM_READONLY_SPECIAL;
+	    if (rplytmp && !errflag) {
+		int onoerrs = noerrs, rplylen;
+		noerrs = 2;
+		rplylen = zstuff(&cmdarg, rplytmp);
+		if (trim) {
+		    /* bash and ksh strip trailing newlines here */
+		    while (rplylen > 0 && cmdarg[rplylen-1] == '\n') {
+			rplylen--;
+			if (trim == 1)
+			    break;
+		    }
+		    cmdarg[rplylen] = 0;
+		}
+		noerrs = onoerrs;
+		if (rplylen >= 0)
+		    setsparam(rplyvar, metafy(cmdarg, rplylen, META_REALLOC));
+	    }
+	    unqueue_signals();
+	}
+
+	if (rplytmp)
+	    unlink(rplytmp);
+	if (rplyvar) {
+	    if (inchar != Inbrace) {
+		if ((val = dupstring(getsparam(rplyvar))))
+		    vunset = 0;
+		else {
+		    vunset = 1;
+		    val = dupstring("");
+		}
+	    } else {
+		s = dyncat(rplyvar, s);
+		rplyvar = NULL;
+	    }
+	    endparamscope();
+	    if (exit_pending) {
+		if (mypid == getpid()) {
+		    /*
+		     * paranoia: don't check for jobs, but there
+		     * shouldn't be any if not interactive.
+		     */
+		    stopmsg = 1;
+		    zexit(exit_val, ZEXIT_NORMAL);
+		} else
+		    _exit(exit_val);
+	    }
+	}
+
 	/*
 	 * In ksh emulation a leading `!' is a special flag working
 	 * sort of like our (k).  This is true only for arrays or
@@ -2583,14 +2795,14 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
 	 * we let fetchvalue set the main string pointer s to
 	 * the end of the bit it's fetched.
 	 */
-	if (!(v = fetchvalue(&vbuf, (subexp ? &ov : &s),
-			     (wantt ? -1 :
-			      ((unset(KSHARRAYS) || inbrace) ? 1 : -1)),
-			     scanflags)) ||
-	    (v->pm && (v->pm->node.flags & PM_UNSET)) ||
-	    (v->flags & VALFLAG_EMPTY))
+	if (!rplyvar &&
+	    (!(v = fetchvalue(&vbuf, (subexp ? &ov : &s),
+			      (wantt ? -1 :
+			       ((unset(KSHARRAYS) || inbrace) ? 1 : -1)),
+			      scanflags)) ||
+	     (v->pm && (v->pm->node.flags & PM_UNSET)) ||
+	     (v->flags & VALFLAG_EMPTY)))
 	    vunset = 1;
-
 	if (wantt) {
 	    /*
 	     * Handle the (t) flag: value now becomes the type
@@ -2938,6 +3150,13 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
 			chuck(ptr);
 		    else
 			ptr++;
+		} else if (c == Dnull) {
+		    chuck(ptr);
+		    while (*ptr && *ptr != c)
+			ptr++;
+		    if (*ptr == Dnull)
+			chuck(ptr);
+		    ptr--;	/* Outer loop is about to increment */
 		}
 	    }
 	    replstr = (*ptr && ptr[1]) ? ptr+1 : "";
@@ -3108,8 +3327,10 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
                 if (isset(EXECOPT)) {
                     *idend = '\0';
 		    if (*s){
+			int l;
 			singsub(&s);
-			zerr("%s: %s", idbeg, s);
+			s = unmetafy(s, &l);
+			zerr("%s: %l", idbeg, s, l);
 		    } else
 			zerr("%s: %s", idbeg, "parameter not set");
                     /*
@@ -3253,6 +3474,9 @@ paramsubst(LinkList l, LinkNode n, char **str, int qt, int pf_flags,
 	} else {
 	    char *sval;
 	    zip = getaparam(s);
+	    if (!zip) {
+		zip = gethparam(s);
+	    }
 	    if (!zip) {
 		sval = getsparam(s);
 		if (sval)
@@ -4539,7 +4763,8 @@ modify(char **str, char **ptr, int inbrace)
 		    case 'S':
 			hsubpatopt = (c == 'S');
 			if (hsubl && hsubr)
-			    subst(&copy, hsubl, hsubr, gbal, hsubpatopt);
+			    subst(&copy, dupstring(hsubl), dupstring(hsubr),
+				  gbal, hsubpatopt);
 			break;
 		    case 'q':
 			copy = quotestring(copy, QT_BACKSLASH_SHOWNULL);
@@ -4627,7 +4852,8 @@ modify(char **str, char **ptr, int inbrace)
 		case 'S':
 		    hsubpatopt = (c == 'S');
 		    if (hsubl && hsubr)
-			subst(str, hsubl, hsubr, gbal, hsubpatopt);
+			subst(str, dupstring(hsubl), dupstring(hsubr),
+			      gbal, hsubpatopt);
 		    break;
 		case 'q':
 		    *str = quotestring(*str, QT_BACKSLASH);

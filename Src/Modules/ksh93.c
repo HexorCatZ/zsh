@@ -38,7 +38,7 @@
  */
 
 static struct builtin bintab[] = {
-    BUILTIN("nameref", BINF_ASSIGN, (HandlerFunc)bin_typeset, 0, -1, 0, "gr", "n")
+    BUILTIN("nameref", BINF_ASSIGN, (HandlerFunc)bin_typeset, 0, -1, 0, "gur", "n")
 };
 
 #include "zsh.mdh"
@@ -102,9 +102,10 @@ static const struct gsu_scalar sh_name_gsu =
 static const struct gsu_scalar sh_subscript_gsu =
     { strvargetfn, nullstrsetfn, nullunsetfn };
 
-static char *sh_name;
-static char *sh_subscript;
-static char *sh_edchar;
+static char sh_unsetval[2];	/* Dummy to treat as NULL */
+static char *sh_name = sh_unsetval;
+static char *sh_subscript = sh_unsetval;
+static char *sh_edchar = sh_unsetval;
 static char sh_edmode[2];
 
 /*
@@ -113,18 +114,17 @@ static char sh_edmode[2];
  * obviously includes those commented out here.
  */
 static struct paramdef partab[] = {
-    PARAMDEF(".sh.command", PM_NAMEREF|PM_READONLY, "ZSH_DEBUG_CMD", &constant_gsu),
-    PARAMDEF(".sh.edchar", PM_SCALAR|PM_SPECIAL, &sh_edchar, &sh_edchar_gsu),
-    PARAMDEF(".sh.edcol", PM_NAMEREF|PM_READONLY, "CURSOR", &constant_gsu),
-    PARAMDEF(".sh.edmode", PM_SCALAR|PM_READONLY|PM_SPECIAL, &sh_edmode, &sh_edmode_gsu),
-    PARAMDEF(".sh.edtext", PM_NAMEREF|PM_READONLY, "BUFFER", &constant_gsu),
+    PARAMDEF(".sh.edchar", PM_SCALAR|PM_SPECIAL,
+	     &sh_edchar, &sh_edchar_gsu),
+    PARAMDEF(".sh.edmode", PM_SCALAR|PM_READONLY|PM_SPECIAL,
+	     &sh_edmode, &sh_edmode_gsu),
     PARAMDEF(".sh.file", PM_NAMEREF|PM_READONLY, "ZSH_SCRIPT", &constant_gsu),
-    /* PARAMDEF(".sh.fun", PM_SCALAR|PM_UNSET, NULL, &constant_gsu), */
-    /* PARAMDEF(".sh.level", PM_INTEGER|PM_UNSET, NULL, &constant_gsu), */
     PARAMDEF(".sh.lineno", PM_NAMEREF|PM_READONLY, "LINENO", &constant_gsu),
     PARAMDEF(".sh.match", PM_ARRAY|PM_READONLY, NULL, &sh_match_gsu),
-    PARAMDEF(".sh.name", PM_SCALAR|PM_READONLY|PM_SPECIAL, &sh_name, &sh_name_gsu),
-    PARAMDEF(".sh.subscript", PM_SCALAR|PM_READONLY|PM_SPECIAL, &sh_subscript, &sh_subscript_gsu),
+    PARAMDEF(".sh.name", PM_SCALAR|PM_READONLY|PM_SPECIAL,
+	     &sh_name, &sh_name_gsu),
+    PARAMDEF(".sh.subscript", PM_SCALAR|PM_READONLY|PM_SPECIAL,
+	     &sh_subscript, &sh_subscript_gsu),
     PARAMDEF(".sh.subshell", PM_NAMEREF|PM_READONLY, "ZSH_SUBSHELL", &constant_gsu),
     /* SPECIALPMDEF(".sh.value", 0, NULL, NULL, NULL), */
     PARAMDEF(".sh.version", PM_NAMEREF|PM_READONLY, "ZSH_PATCHLEVEL", &constant_gsu)
@@ -156,14 +156,34 @@ ksh93_wrapper(Eprog prog, FuncWrap w, char *name)
 
     queue_signals();
     ++locallevel;		/* Make these local */
-    if ((pm = createparam(".sh.level", PM_LOCAL|PM_UNSET))) {
+#define LOCAL_NAMEREF (PM_LOCAL|PM_UNSET|PM_NAMEREF)
+    if ((pm = createparam(".sh.command", LOCAL_NAMEREF))) {
 	pm->level = locallevel;	/* Why is this necessary? */
-	setiparam(".sh.level", num);
+	/* Force scoping by assignent hack */
+	setloopvar(".sh.command", "ZSH_DEBUG_CMD");
+	pm->node.flags |= PM_READONLY;
     }
+    /* .sh.edchar is in partab and below */
+    if (zleactive && (pm = createparam(".sh.edcol", LOCAL_NAMEREF))) {
+	pm->level = locallevel;
+	setloopvar(".sh.edcol", "CURSOR");
+	pm->node.flags |= (PM_NAMEREF|PM_READONLY);
+    }
+    /* .sh.edmode is in partab and below */
+    if (zleactive && (pm = createparam(".sh.edtext", LOCAL_NAMEREF))) {
+	pm->level = locallevel;
+	setloopvar(".sh.edtext", "BUFFER");
+	pm->node.flags |= PM_READONLY;
+    }
+
     if ((pm = createparam(".sh.fun", PM_LOCAL|PM_UNSET))) {
 	pm->level = locallevel;
 	setsparam(".sh.fun", ztrdup(name));
 	pm->node.flags |= PM_READONLY;
+    }
+    if ((pm = createparam(".sh.level", PM_LOCAL|PM_UNSET))) {
+	pm->level = locallevel;
+	setiparam(".sh.level", num);
     }
     if (zleactive) {
 	extern mod_import_variable char *curkeymapname;	/* XXX */
@@ -171,10 +191,10 @@ ksh93_wrapper(Eprog prog, FuncWrap w, char *name)
 	/* bindkey -v forces VIMODE so this test is as good as any */
 	if (curkeymapname && isset(VIMODE) &&
 	    strcmp(curkeymapname, "main") == 0)
-	    strcpy(sh_edmode, "\e");
+	    strcpy(sh_edmode, "\033");
 	else
 	    strcpy(sh_edmode, "");
-	if (!sh_edchar)
+	if (sh_edchar == sh_unsetval)
 	    sh_edchar = dupstring(getsparam("KEYS"));
 	if (varedarg) {
 	    char *ie = itype_end((sh_name = dupstring(varedarg)), INAMESPC, 0);
@@ -185,15 +205,16 @@ ksh93_wrapper(Eprog prog, FuncWrap w, char *name)
 		ie = sh_subscript + strlen(sh_subscript);
 		*--ie = '\0';
 	    } else
-		sh_subscript = NULL;
-	    if ((pm = createparam(".sh.value", PM_LOCAL|PM_NAMEREF|PM_UNSET))) {
+		sh_subscript = sh_unsetval;
+	    if ((pm = createparam(".sh.value", LOCAL_NAMEREF))) {
 		pm->level = locallevel;
 		setloopvar(".sh.value", "BUFFER");	/* Hack */
+		pm->node.flags |= PM_READONLY;
 	    }
 	} else
-	    sh_name = sh_subscript = NULL;
+	    sh_name = sh_subscript = sh_unsetval;
     } else {
-	sh_edchar = sh_name = sh_subscript = NULL;
+	sh_edchar = sh_name = sh_subscript = sh_unsetval;
 	strcpy(sh_edmode, "");
 	/* TODO:
 	 * - disciplines

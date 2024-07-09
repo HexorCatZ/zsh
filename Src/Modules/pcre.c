@@ -129,6 +129,31 @@ bin_pcre_study(char *nam, UNUSED(char **args), UNUSED(Options ops), UNUSED(int f
 }
 
 static int
+pcre_callout(pcre2_callout_block_8 *block, UNUSED(void *callout_data))
+{
+    Eprog prog;
+    int ret=0;
+
+    if (!block->callout_number &&
+	    ((prog = parse_string((char *) block->callout_string, 0))))
+    {
+	int ef = errflag, lv = lastval;
+
+	setsparam(".pcre.subject",
+		metafy((char *) block->subject, block->subject_length, META_DUP));
+	setiparam(".pcre.pos", block->current_position + 1);
+	execode(prog, 1, 0, "pcre");
+	ret = lastval | errflag;
+
+	/* Restore any user interrupt error status */
+	errflag = ef | (errflag & ERRFLAG_INT);
+	lastval = lv;
+    }
+
+    return ret;
+}
+
+static int
 zpcre_get_substrings(pcre2_code *pat, char *arg, pcre2_match_data *mdata,
 	int captured_count, char *matchvar, char *substravar, char *namedassoc,
 	int want_offset_pair, int matchedinarr, int want_begin_end)
@@ -187,7 +212,8 @@ zpcre_get_substrings(pcre2_code *pat, char *arg, pcre2_match_data *mdata,
 	    setaparam(substravar, matches);
 	}
 
-	if (!pcre2_pattern_info(pat, PCRE2_INFO_NAMECOUNT, &ncount) && ncount
+	if (namedassoc
+		&& !pcre2_pattern_info(pat, PCRE2_INFO_NAMECOUNT, &ncount) && ncount
 		&& !pcre2_pattern_info(pat, PCRE2_INFO_NAMEENTRYSIZE, &nsize)
 		&& !pcre2_pattern_info(pat, PCRE2_INFO_NAMETABLE, &ntable))
 	{
@@ -338,6 +364,9 @@ bin_pcre_match(char *nam, char **args, Options ops, UNUSED(int func))
     plaintext = ztrdup(*args);
     unmetafy(plaintext, &subject_len);
 
+    pcre2_match_context_8 *mcontext = pcre2_match_context_create(NULL);
+    pcre2_set_callout(mcontext, &pcre_callout, 0);
+
     if (offset_start > 0 && offset_start >= subject_len)
 	ret = PCRE2_ERROR_NOMATCH;
     else if (use_dfa) {
@@ -346,7 +375,7 @@ bin_pcre_match(char *nam, char **args, Options ops, UNUSED(int func))
 	pcre_mdata = pcre2_match_data_create(capcount, NULL);
 	do {
 	    ret = pcre2_dfa_match(pcre_pattern, (PCRE2_SPTR) plaintext, subject_len,
-		offset_start, 0, pcre_mdata, NULL, (int *) workspace, wscount);
+		offset_start, 0, pcre_mdata, mcontext, (int *) workspace, wscount);
 	    if (ret == PCRE2_ERROR_DFA_WSSIZE) {
 		old = wscount;
 		wscount += wscount / 2;
@@ -361,7 +390,9 @@ bin_pcre_match(char *nam, char **args, Options ops, UNUSED(int func))
     } else {
 	pcre_mdata = pcre2_match_data_create_from_pattern(pcre_pattern, NULL);
 	ret = pcre2_match(pcre_pattern, (PCRE2_SPTR) plaintext, subject_len,
-		offset_start, 0, pcre_mdata, NULL);
+		offset_start, 0, pcre_mdata, mcontext);
+	if (ret > 0)
+	    ret = pcre2_get_ovector_count(pcre_mdata);
     }
 
     if (ret==0) return_value = 0;
@@ -374,11 +405,13 @@ bin_pcre_match(char *nam, char **args, Options ops, UNUSED(int func))
     else {
 	PCRE2_UCHAR buffer[256];
 	pcre2_get_error_message(ret, buffer, sizeof(buffer));
-	zwarnnam(nam, "error in pcre matching for /%s/: %s", plaintext, buffer);
+	zwarnnam(nam, "error in pcre matching for %s: %s", *args, buffer);
     }
     
     if (pcre_mdata)
 	pcre2_match_data_free(pcre_mdata);
+    if (mcontext)
+	pcre2_match_context_free(mcontext);
     zsfree(plaintext);
 
     return return_value;
@@ -448,7 +481,8 @@ cond_pcre_match(char **a, int id)
 		    break;
 		}
                 else if (r>0) {
-		    zpcre_get_substrings(pcre_pat, lhstr_plain, pcre_mdata, r, svar, avar,
+		    uint32_t ovec_count = pcre2_get_ovector_count(pcre_mdata);
+		    zpcre_get_substrings(pcre_pat, lhstr_plain, pcre_mdata, ovec_count, svar, avar,
 			    ".pcre.match", 0, isset(BASHREMATCH), !isset(BASHREMATCH));
 		    return_value = 1;
 		    break;

@@ -27,7 +27,7 @@
  *
  */
 
-#define SIGNAL_HANDTYPE void (*)_((int))
+#define SIGNAL_HANDTYPE void (*)(int)
 
 #ifndef HAVE_KILLPG
 # define killpg(pgrp,sig) kill(-(pgrp),sig)
@@ -36,6 +36,15 @@
 #define SIGZERR   (SIGCOUNT+1)
 #define SIGDEBUG  (SIGCOUNT+2)
 #define VSIGCOUNT (SIGCOUNT+3)
+#if defined(SIGRTMIN) && defined(SIGRTMAX)
+# define TRAPCOUNT (VSIGCOUNT + SIGRTMAX - SIGRTMIN + 1)
+# define SIGNUM(x) ((x) >= VSIGCOUNT ? (x) - VSIGCOUNT + SIGRTMIN : (x))
+# define SIGIDX(x) ((x) >= SIGRTMIN && (x) <= SIGRTMAX ? (x) - SIGRTMIN + VSIGCOUNT : (x))
+#else
+# define TRAPCOUNT VSIGCOUNT
+# define SIGNUM(x) (x)
+# define SIGIDX(x) (x)
+#endif
 #define SIGEXIT    0
 
 #ifdef SV_BSDSIG
@@ -136,7 +145,7 @@
 #ifdef BSD_SIGNALS
 #define signal_block(S) sigblock(S)
 #else
-extern sigset_t signal_block _((sigset_t));
+extern sigset_t signal_block (sigset_t);
 #endif  /* BSD_SIGNALS   */
 
-extern sigset_t signal_unblock _((sigset_t));
+extern sigset_t signal_unblock (sigset_t);

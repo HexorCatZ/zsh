@@ -127,7 +127,7 @@ typedef int (*readwrite_t)(int, char *, off_t, int);
 
 struct zftpcmd {
     const char *nam;
-    int (*fun) _((char *, char **, int));
+    int (*fun) (char *, char **, int);
     int min, max, flags;
 };
 
@@ -3147,6 +3147,7 @@ zftp_cleanup(void)
     lastmsg = NULL;
     zfunsetparam("ZFTP_SESSION");
     freelinklist(zfsessions, (FreeFunc) freesession);
+    zfsessions = NULL;
     zfree(zfstatusp, sizeof(int)*zfsesscnt);
     zfstatusp = NULL;
 }

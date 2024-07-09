@@ -267,7 +267,7 @@ static char *blank_env[] = { NULL };
 
 /* Execution functions. */
 
-static int (*execfuncs[WC_COUNT-WC_CURSH]) _((Estate, int)) = {
+static int (*execfuncs[WC_COUNT-WC_CURSH]) (Estate, int) = {
     execcursh, exectime, NULL /* execfuncdef handled specially */,
     execfor, execselect,
     execwhile, execrepeat, execcase, execif, execcond,
@@ -551,7 +551,7 @@ zexecve(char *pth, char **argv, char **newenvp)
 			    break;
 		    if (t0 == ct)
 			zerr("%s: bad interpreter: %s: %e", pth,
-			     execvebuf + 2, eno);
+			     metafy(execvebuf + 2, -1, META_STATIC), eno);
 		    else {
 			while (inblank(execvebuf[t0]))
 			    execvebuf[t0--] = '\0';
@@ -574,8 +574,8 @@ zexecve(char *pth, char **argv, char **newenvp)
 				    execve(pprog, argv - 2, newenvp);
 				}
 			    }
-			    zerr("%s: bad interpreter: %s: %e", pth, ptr2,
-				 eno);
+			    zerr("%s: bad interpreter: %s: %e", pth,
+				 metafy(ptr2, -1, META_STATIC), eno);
 			} else if (*ptr) {
 			    *ptr = '\0';
 			    argv[-2] = ptr2;
@@ -612,9 +612,22 @@ zexecve(char *pth, char **argv, char **newenvp)
                         }
                     }
 		    if (!isbinary) {
-			argv[-1] = "sh";
+		        char** args = argv;
+			if (argv[0][0] == '-' || argv[0][0] == '+') {
+			    /*
+			     * guard against +foo or -bar script paths being
+			     * taken as options. POSIX says the script path
+			     * must be passed as an *operand*. "--" would also
+			     * make sure the next argument is treated as an
+			     * operand with POSIX compliant sh implementations
+			     * but "-" is more portable (to the Bourne shell in
+			     * particular) and shorter.
+			     */
+			    *--args = "-";
+			}
+			*--args = "sh";
 			winch_unblock();
-			execve("/bin/sh", argv - 1, newenvp);
+			execve("/bin/sh", args, newenvp);
 		    }
 		}
 	    } else
@@ -1555,6 +1568,7 @@ execlist(Estate state, int dont_change_job, int exiting)
 	    }
 	    state->pc = next;
 	    code = *state->pc++;
+	    noerrexit = oldnoerrexit;
 	}
 	state->pc--;
 sublist_done:
@@ -2290,6 +2304,8 @@ closemn(struct multio **mfds, int fd, int type)
 	    return;
 	}
 	/* pid == 0 */
+	opts[INTERACTIVE] = 0;
+	dont_queue_signals();
 	child_unblock();
 	closeallelse(mn);
 	if (mn->rflag) {
@@ -2302,19 +2318,21 @@ closemn(struct multio **mfds, int fd, int type)
 			break;
 		}
 		for (i = 0; i < mn->ct; i++)
-		    write_loop(mn->fds[i], buf, len);
+		    if (write_loop(mn->fds[i], buf, len) < 0)
+			break;
 	    }
 	} else {
 	    /* cat process */
 	    for (i = 0; i < mn->ct; i++)
 		while ((len = read(mn->fds[i], buf, TCBUFSIZE)) != 0) {
 		    if (len < 0) {
-			if (errno == EINTR)
+			if (errno == EINTR && !isatty(mn->fds[i]))
 			    continue;
 			else
 			    break;
 		    }
-		    write_loop(mn->pipe, buf, len);
+		    if (write_loop(mn->pipe, buf, len) < 0)
+			break;
 		}
 	}
 	_exit(0);
@@ -2388,7 +2406,7 @@ addfd(int forked, int *save, struct multio **mfds, int fd1, int fd2, int rflag,
 	/* fd will be over 10, don't touch mfds */
 	fd1 = movefd(fd2);
 	if (fd1 == -1) {
-	    zerr("cannot moved fd %d: %e", fd2, errno);
+	    zerr("cannot move fd %d: %e", fd2, errno);
 	    return;
 	} else {
 	    fdtable[fd1] = FDT_EXTERNAL;
@@ -2587,6 +2605,17 @@ addvars(Estate state, Wordcode pc, int addflags)
 		opts[ALLEXPORT] = allexp;
 	    } else
 	    	pm = assignsparam(name, val, myflags);
+	    if (!pm) {
+		lastval = 1;
+		/*
+		 * This is cheating but some exec functions propagate
+		 * assignment status only from command substitution
+		 *
+		 * zerr("%s: assignment failed", name);
+		 */
+		if (!cmdoutval)
+		    cmdoutval = 1;
+	    }
 	    if (errflag) {
 		state->pc = opc;
 		return;
@@ -2611,7 +2640,16 @@ addvars(Estate state, Wordcode pc, int addflags)
 	    }
 	    fprintf(xtrerr, ") ");
 	}
-	assignaparam(name, arr, myflags);
+	if (!assignaparam(name, arr, myflags)) {
+	    lastval = 1;
+	    /*
+	     * See above RE "cheating"
+	     *
+	     * zerr("%s: array assignment failed", name);
+	     */
+	    if (!cmdoutval)
+		cmdoutval = 1;
+	}
 	if (errflag) {
 	    state->pc = opc;
 	    return;
@@ -3751,7 +3789,7 @@ execcmd_exec(Estate state, Execcmd_params eparams,
 		addfd(forked, save, mfds, fn->fd1, fil, 0, fn->varid);
 		/* If this is 'exec < file', read from stdin, *
 		 * not terminal, unless `file' is a terminal. */
-		if (nullexec == 1 && fn->fd1 == 0 &&
+		if (nullexec == 1 && fn->fd1 == 0 && !fn->varid &&
 		    isset(SHINSTDIN) && interact && !zleactive)
 		    init_io(NULL);
 		break;
@@ -4371,7 +4409,7 @@ save_params(Estate state, Wordcode pc, LinkList *restore_p, LinkList *remove_p)
     while (wc_code(ac = *pc) == WC_ASSIGN) {
 	s = ecrawstr(state->prog, pc + 1, NULL);
 	if ((pm = (Param) paramtab->getnode(paramtab, s))) {
-	    Param tpm;
+	    Param tpm = NULL;
 	    if (pm->env)
 		delenv(pm);
 	    if (!(pm->node.flags & PM_SPECIAL)) {
@@ -4388,7 +4426,6 @@ save_params(Estate state, Wordcode pc, LinkList *restore_p, LinkList *remove_p)
 		tpm = (Param) zshcalloc(sizeof *tpm);
 		tpm->node.nam = ztrdup(pm->node.nam);
 		copyparam(tpm, pm, 0);
-		pm = tpm;
 	    } else if (!(pm->node.flags & PM_READONLY) &&
 		       (unset(RESTRICTED) || !(pm->node.flags & PM_RESTRICTED))) {
 		/*
@@ -4399,10 +4436,10 @@ save_params(Estate state, Wordcode pc, LinkList *restore_p, LinkList *remove_p)
 		tpm = (Param) hcalloc(sizeof *tpm);
 		tpm->node.nam = pm->node.nam;
 		copyparam(tpm, pm, 1);
-		pm = tpm;
 	    }
 	    addlinknode(*remove_p, dupstring(s));
-	    addlinknode(*restore_p, pm);
+	    if (tpm)
+		addlinknode(*restore_p, tpm);
 	} else
 	    addlinknode(*remove_p, dupstring(s));
 
@@ -4897,7 +4934,6 @@ getoutputfile(char *cmd, char **eptr)
 
     if ((fd = open(nam, O_WRONLY | O_CREAT | O_EXCL | O_NOCTTY, 0600)) < 0) {
 	zerr("process substitution failed: %e", errno);
-	free(nam);
 	if (!s)
 	    child_unblock();
 	return NULL;
@@ -5097,7 +5133,7 @@ getpipe(char *cmd, int nullexec)
 	procsubstpid = pid;
 	return pipes[!out];
     }
-    entersubsh(ESUB_ASYNC|ESUB_PGRP, NULL);
+    entersubsh(ESUB_ASYNC|ESUB_PGRP|ESUB_NOMONITOR, NULL);
     redup(pipes[out], out);
     closem(FDT_UNUSED, 0);	/* this closes pipes[!out] as well */
     cmdpush(CS_CMDSUBST);
@@ -5411,7 +5447,7 @@ execfuncdef(Estate state, Eprog redir_prog)
 	} else {
 	    /* is this shell function a signal trap? */
 	    if (!strncmp(s, "TRAP", 4) &&
-		(signum = getsignum(s + 4)) != -1) {
+		(signum = getsigidx(s + 4)) != -1) {
 		if (settrap(signum, NULL, ZSIG_FUNC)) {
 		    freeeprog(shf->funcdef);
 		    dircache_set(&shf->filename, NULL);

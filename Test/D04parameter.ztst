@@ -1222,6 +1222,7 @@
   typeset -T STRING string
   print $STRING $string
   unset string
+  typeset -p string
   STRING=x:y:z
   print $STRING $string
   STRING=a:b
@@ -2762,13 +2763,13 @@ F:behavior, see http://austingroupbugs.net/view.php?id=888
 
  slash='/'
  print -r -- x${slash/'/'}y
--Df:(users/28784) substituting a single-quoted backslash, part #1: slash
+0:(users/28784) substituting a single-quoted backslash, part #1: slash
 >xy
 
  single_quote="'"
- print -r -- x${single_quote/'/'}y
--Df:(users/28784) substituting a single-quoted backslash, part #2: single quote
->x/y
+ print -r -- x${single_quote/$'/'}y
+0:(users/28784) substituting a single-quoted backslash, part #2: single quote
+>x'y
 
  control="foobar"
  print -r -- x${control/'bar'}y
@@ -2785,3 +2786,51 @@ F:behavior, see http://austingroupbugs.net/view.php?id=888
 >string with spaces
 >stringwithspaces
 >stringwithspaces
+
+  : ${(#X):-@}
+1:${(#X)...}: bad math expression
+?(eval):1: bad math expression: illegal character: @
+
+  echo a${(#):-@}z
+0:${(#)...}: bad math expression
+>az
+
+  printf "a%sz\n" ${(#):-@}
+0:${(#)...}: bad math expression, printf
+>az
+
+  a=( '1 +' '@' )
+  : ${(#X)a}
+1:${(#X)...}: array of bad math expressions
+?(eval):2: bad math expression: operand expected at end of string
+
+  printf "a%sz\n" ${(#)a}
+0:${(#)...}: array of bad math expressions, printf
+>az
+
+  if [[ ! -o multibyte ]]; then
+    ZTST_skip='(#X) accepts any byte if multibyte is off'
+  else
+    : ${(#X):-0x80}
+  fi
+1:${(#X)...}: out-of-range character
+?(eval):4: character not in range
+
+  [[ ${(#):-0x80} = $'\x80' ]] && echo OK
+0:${(#)...}: out-of-range character
+>OK
+
+  a=( 0x80 0x81 )
+  printf "%s\n" ${(#)a} |
+  while read x; do echo $(( #x )); done
+0:${(#)...}: array of out-of-range characters
+>128
+>129
+
+  if [[ ! -o multibyte ]]; then
+    ZTST_skip='(#X) accepts any byte if multibyte is off'
+  else
+    : ${(#X)a}
+  fi
+1:${(#X)...}: array of out-of-range characters
+?(eval):4: character not in range

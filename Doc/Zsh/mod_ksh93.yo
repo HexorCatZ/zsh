@@ -12,7 +12,7 @@ The single builtin provided by this module is:
 startitem()
 findex(nameref)
 cindex(named references, creating)
-item(tt(nameref) [ tt(-r) ] var(pname)[tt(=)var(rname)])(
+item(tt(nameref) [ tt(-gur) ] var(pname)[tt(=)var(rname)])(
 Equivalent to tt(typeset -n )var(pname)tt(=)var(rname)
 
 However, tt(nameref) is a builtin command rather than a reserved word,
@@ -183,13 +183,6 @@ item(tt(var(name)tt(.unset)))(
 When a function of this name is defined, it is called whenever the
 parameter var(name) would be unset.  The function must explicitly
 `tt(unset )var(name)', otherwise the variable remains set.
-
-em(THIS FEATURE IS NOT YET IMPLEMENTED.)
-)
-item(tt(${ )var(list)tt(;}))(
-Note the space after the opening brace (tt({)). This executes var(list)
-in the current shell and substitutes its standard output in the manner
-of `tt($LPAR())var(list)tt(RPAR())' but without forking.
 
 em(THIS FEATURE IS NOT YET IMPLEMENTED.)
 )
